@@ -1,0 +1,4 @@
+.venv/
+.env
+backend/memory.json
+__pycache__/

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyEdMaster – Legal Chatbot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <h2>Chat History</h2>
+      <button class="btn-new" id="newChatBtn">+ New Chat</button>
+    </div>
+    <div class="sidebar-list" id="sidebarList"></div>
+  </aside>
+
+  <div class="overlay" id="overlay"></div>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="header">
+      <div class="header-left">
+        <button class="btn-menu" id="menuBtn" title="Chat history">&#9776;</button>
+        <div class="brand">
+          <div class="logo">M</div>
+          <div class="brand-text">
+            <h1>MyEdMaster</h1>
+            <span>Legal Chatbot</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="toggle-wrap" id="themeToggle" title="Toggle dark mode">
+          <span class="icon icon-sun">&#9728;&#65039;</span>
+          <span class="icon icon-moon">&#127769;</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-area" id="chatArea">
+      <div class="empty-state">
+        <div class="empty-icon">&#9878;</div>
+        <p class="empty-title">Welcome to MyEdMaster Legal Chatbot</p>
+        <p class="empty-sub">Ask any legal question about business or education topics to get started.</p>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-wrap">
+        <textarea rows="1" placeholder="Type your legal question…" id="msgInput"></textarea>
+        <button class="btn-send" id="sendBtn" title="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="disclaimer">
+      MyEdMaster provides general legal information &mdash; not formal legal advice.
+      Consult a licensed attorney for jurisdiction-specific decisions.
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
