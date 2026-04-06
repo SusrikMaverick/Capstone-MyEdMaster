@@ -1,11 +1,15 @@
 let activeChat = null;
 let sending = false;
+let docMode = false;
 
 const $ = (s) => document.querySelector(s);
 const chatArea = $('#chatArea');
 const sidebarList = $('#sidebarList');
 const msgInput = $('#msgInput');
 const sendBtn = $('#sendBtn');
+const docToggle = $('#docToggle');
+const inputWrap = $('#inputWrap');
+const modeHint = $('#modeHint');
 
 // ── API helpers ──
 
@@ -101,7 +105,19 @@ $('#newChatBtn').addEventListener('click', async () => {
   msgInput.focus();
 });
 
-// ── Send message ──
+// ── Document mode toggle ──
+
+docToggle.addEventListener('click', () => {
+  docMode = !docMode;
+  docToggle.classList.toggle('active', docMode);
+  inputWrap.classList.toggle('doc-mode', docMode);
+  msgInput.placeholder = docMode
+    ? 'Describe the legal document you need…'
+    : 'Type your legal question\u2026';
+  modeHint.textContent = docMode ? 'PDF generation mode' : '';
+});
+
+// ── Send message / generate document ──
 
 async function sendMessage() {
   const text = msgInput.value.trim();
@@ -115,26 +131,37 @@ async function sendMessage() {
   sending = true;
   sendBtn.disabled = true;
 
-  // Show user bubble immediately
   if (chatArea.querySelector('.empty-state')) chatArea.innerHTML = '';
   appendBubble('user', text);
   msgInput.value = '';
   msgInput.style.height = 'auto';
 
-  // Show typing indicator
   const typingEl = appendTyping();
   scrollBottom();
 
   try {
-    const data = await api(`/api/chats/${activeChat}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({ message: text }),
-    });
-    typingEl.remove();
-    if (data.error) {
-      appendError(data.error);
+    if (docMode) {
+      const data = await api(`/api/chats/${activeChat}/document`, {
+        method: 'POST',
+        body: JSON.stringify({ message: text }),
+      });
+      typingEl.remove();
+      if (data.error) {
+        appendError(data.error);
+      } else {
+        appendDocBubble(data.reply, data.doc_id, data.title);
+      }
     } else {
-      appendBubble('assistant', data.reply);
+      const data = await api(`/api/chats/${activeChat}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ message: text }),
+      });
+      typingEl.remove();
+      if (data.error) {
+        appendError(data.error);
+      } else {
+        appendBubble('assistant', data.reply);
+      }
     }
   } catch (err) {
     typingEl.remove();
@@ -173,6 +200,19 @@ function appendBubble(role, content) {
     div.className = 'msg-row msg-bot';
     div.innerHTML = `<div class="avatar">M</div><div class="bubble bubble-bot">${esc(content)}</div>`;
   }
+  chatArea.appendChild(div);
+}
+
+function appendDocBubble(content, docId, title) {
+  const div = document.createElement('div');
+  div.className = 'msg-row msg-bot';
+  const downloadIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  div.innerHTML =
+    `<div class="avatar">M</div>` +
+    `<div class="bubble bubble-bot">` +
+      `Your document <strong>${esc(title)}</strong> is ready.` +
+      `<br><a class="btn-download" href="/api/documents/${docId}" target="_blank">${downloadIcon} Download PDF</a>` +
+    `</div>`;
   chatArea.appendChild(div);
 }
 
