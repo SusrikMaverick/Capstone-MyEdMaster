@@ -1,6 +1,8 @@
 let activeChat = null;
 let sending = false;
 let docMode = false;
+let guidedMode = false;
+let activeDraftEditor = null;
 
 const $ = (s) => document.querySelector(s);
 const chatArea = $('#chatArea');
@@ -10,6 +12,7 @@ const sendBtn = $('#sendBtn');
 const docToggle = $('#docToggle');
 const inputWrap = $('#inputWrap');
 const modeHint = $('#modeHint');
+const guidedToggle = $('#guidedToggle');
 
 // ── API helpers ──
 
@@ -71,9 +74,37 @@ sidebarList.addEventListener('click', async (e) => {
 
 async function selectChat(id) {
   activeChat = id;
+
+  const store = await api('/api/chats');
+  const chat = store.chats.find(c => c.id === id);
+
+  guidedMode = chat?.mode === 'guided';
+  updatePlaceholder();
+  guidedToggle.classList.toggle('active', guidedMode);
+
   const data = await api(`/api/chats/${id}/messages`);
   renderMessages(data.messages);
+
+  const stage = data.stage;
+
+  // clear old editor
+  if (activeDraftEditor) {
+    activeDraftEditor.remove();
+    activeDraftEditor = null;
+  }
+
   await loadChats();
+
+  if (guidedMode && data.document) {
+    if (data.stage === "editing") {
+      renderDraftForEditing(data.document);
+    }
+
+    if (data.stage === "complete") {
+      appendDocBubble(data.document, "existing", "Final Document");
+    }
+}
+
 }
 
 function renderMessages(messages) {
@@ -83,6 +114,97 @@ function renderMessages(messages) {
       ? `<div class="msg-row msg-user"><div class="bubble bubble-user">${esc(m.content)}</div></div>`
       : `<div class="msg-row msg-bot"><div class="avatar">M</div><div class="bubble bubble-bot">${esc(m.content)}</div></div>`
   ).join('');
+  scrollBottom();
+}
+
+function renderDraftForEditing(draftText) {
+  if (activeDraftEditor && document.body.contains(activeDraftEditor)) {
+    const oldTextarea = activeDraftEditor.querySelector('.draft-textarea');
+    if (oldTextarea) {
+      appendBubble('assistant', oldTextarea.value);
+    }
+    activeDraftEditor.remove();
+    activeDraftEditor = null;
+  }
+  
+  const row = document.createElement('div');
+  row.className = 'msg-row msg-bot';
+  chatArea.appendChild(row);
+
+  row.innerHTML = `
+    <div class="avatar">M</div>
+    <div class="bubble bubble-bot editor-bubble">
+      <textarea class="draft-textarea"></textarea>
+
+      <div class="editor-actions">
+        <button class="btn-save">Save</button>
+        <button class="btn-done">Done</button>
+      </div>
+    </div>
+  `;
+
+  const textarea = row.querySelector('.draft-textarea');
+  const saveBtn = row.querySelector('.btn-save');
+  const doneBtn = row.querySelector('.btn-done');
+
+  textarea.value = draftText;
+
+  textarea.style.width = "100%";
+  textarea.style.minHeight = "200px";
+  
+  textarea.addEventListener('input', () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 400) + 'px';
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const updatedDraft = textarea.value;
+
+    try {
+      const res = await api(`/api/chats/${activeChat}/draft`, {
+        method: 'POST',
+        body: JSON.stringify({ document: updatedDraft }),
+      });
+      if (res.error) {
+        appendError(res.error);
+        return;
+      }
+      textarea.value = res.document;
+
+      const originalText = saveBtn.textContent;
+      saveBtn.textContent = "Saved!";
+      saveBtn.classList.add('flash');
+
+      setTimeout(() => {
+        saveBtn.textContent = originalText;
+        saveBtn.classList.remove('flash');
+      }, 800);
+
+    } catch {
+      appendError('Error saving draft');
+    }
+  });
+
+  doneBtn.addEventListener('click', async () => {    
+    try {
+      const res = await api(`/api/chats/${activeChat}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ message: "done" }),
+      });
+      if (res.error) {
+        appendError(res.error);
+        return;
+      }
+      activeDraftEditor.remove()
+      activeDraftEditor = null;
+
+      appendDocBubble(res.document, res.doc_id, res.title);
+    } catch {
+      appendError('Error finalizing document');
+    }
+  });
+
+  activeDraftEditor = row;
   scrollBottom();
 }
 
@@ -100,6 +222,16 @@ function showEmpty() {
 $('#newChatBtn').addEventListener('click', async () => {
   const data = await api('/api/chats', { method: 'POST' });
   activeChat = data.id;
+
+  await api(`/api/chats/${activeChat}/mode`, {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: guidedMode ? 'guided' : 'quick'
+    })
+  });
+  guidedToggle.classList.toggle('active', guidedMode);
+  updatePlaceholder();
+
   showEmpty();
   await loadChats();
   msgInput.focus();
@@ -111,11 +243,36 @@ docToggle.addEventListener('click', () => {
   docMode = !docMode;
   docToggle.classList.toggle('active', docMode);
   inputWrap.classList.toggle('doc-mode', docMode);
-  msgInput.placeholder = docMode
-    ? 'Describe the legal document you need…'
-    : 'Type your legal question\u2026';
+  updatePlaceholder();
   modeHint.textContent = docMode ? 'PDF generation mode' : '';
 });
+
+// chat mode toggle
+guidedToggle.addEventListener('click', async () => {
+  guidedMode = !guidedMode;
+  guidedToggle.classList.toggle('active', guidedMode);
+
+  updatePlaceholder();
+
+  if (!activeChat) return;
+
+  await api(`/api/chats/${activeChat}/mode`, {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: guidedMode ? 'guided' : 'quick'
+    })
+  });
+});
+
+function updatePlaceholder() {
+  if (docMode) {
+    msgInput.placeholder = 'Describe the legal document you need…';
+  } else if (guidedMode) {
+    msgInput.placeholder = 'Describe your legal situation to get started…';
+  } else {
+    msgInput.placeholder = 'Type your legal question\u2026';
+  }
+}
 
 // ── Send message / generate document ──
 
@@ -140,7 +297,50 @@ async function sendMessage() {
   scrollBottom();
 
   try {
-    if (docMode) {
+    if(guidedMode) {
+      const data = await api(`/api/chats/${activeChat}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ message: text }),
+      });
+      typingEl.remove();
+      if (data.error) {
+        appendError(data.error);
+      } else {
+        if (data.stage === "complete" && data.doc_id) {
+          if (activeDraftEditor) {
+            activeDraftEditor.remove();
+            activeDraftEditor = null;
+          }
+
+          appendBubble('assistant', data.reply || "Document finalized.");
+          appendDocBubble(data.document, data.doc_id, data.title);
+
+          sending = false;
+          sendBtn.disabled = false;
+          return;
+        }
+
+        if (data.stage === "editing" && data.document) {
+          if (activeDraftEditor) {
+            activeDraftEditor.remove();
+            activeDraftEditor = null;
+          }
+
+          if (data.reply) {
+            appendBubble('assistant', data.reply);
+          }
+
+          renderDraftForEditing(data.document);
+        }
+
+        else{
+          appendBubble('assistant', data.reply);
+        }
+
+        
+      }
+    }
+    else if (docMode) {
       const data = await api(`/api/chats/${activeChat}/document`, {
         method: 'POST',
         body: JSON.stringify({ message: text }),
@@ -277,4 +477,5 @@ function closeMobileSidebar() {
 (async () => {
   await loadChats();
   if (activeChat) await selectChat(activeChat);
+  updatePlaceholder();
 })();

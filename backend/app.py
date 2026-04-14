@@ -7,6 +7,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from ai_core import call_model, read_store, write_store
 from pdf_gen import create_pdf
+from guided import handle_chat
 
 # Set to True to print every request/response to the terminal for debugging
 DEBUG_LOG = False
@@ -65,7 +66,7 @@ def _chat_title(messages):
 def list_chats():
     store = read_store()
     chats = [
-        {"id": cid, "title": d.get("title", "New chat"), "created": d.get("created", "")}
+        {"id": cid, "title": d.get("title", "New chat"), "created": d.get("created", ""), "mode": d.get("mode", "")}
         for cid, d in store["chats"].items()
     ]
     chats.sort(key=lambda x: x["created"], reverse=True)
@@ -80,6 +81,10 @@ def create_chat():
         "title": "New chat",
         "created": datetime.now().isoformat(),
         "messages": [dict(SYSTEM_MSG)],
+        "mode": "quick",
+        "stage": "classifying",
+        "doc_type": None,
+        "previous_answers": {}
     }
     store["active"] = cid
     write_store(store)
@@ -103,6 +108,9 @@ def get_messages(chat_id):
     store = read_store()
     if chat_id not in store["chats"]:
         return jsonify({"error": "Not found"}), 404
+    
+    chat = store["chats"].get(chat_id)
+
     store["active"] = chat_id
     write_store(store)
     messages = [
@@ -110,12 +118,13 @@ def get_messages(chat_id):
         for m in store["chats"][chat_id]["messages"]
         if m["role"] != "system"
     ]
-    return jsonify({"messages": messages})
+    return jsonify({"messages": messages, "stage": chat.get("stage"), "document": chat.get("previous_answers", {}).get("document")})
 
 
 @app.route("/api/chats/<chat_id>/messages", methods=["POST"])
 def send_message(chat_id):
     store = read_store()
+    chat = store["chats"].get(chat_id)
     if chat_id not in store["chats"]:
         return jsonify({"error": "Not found"}), 404
 
@@ -131,7 +140,59 @@ def send_message(chat_id):
     messages.append({"role": "user", "content": user_text})
 
     try:
-        reply = call_model(messages)
+        doc_id = None
+        title = None
+        if chat.get("mode") == "guided":
+            result = handle_chat({
+                "text": user_text,
+                "previous_answers": chat.get("previous_answers", {}),
+                "doc_type": chat.get("doc_type"),
+                "stage": chat.get("stage", "classifying"),
+                })
+            reply = result["message"]
+
+            chat["stage"] = result.get("stage", chat.get("stage"))
+            chat["doc_type"] = result.get("doc_type", chat.get("doc_type"))
+            chat["previous_answers"] = result.get("previous_answers", chat.get("previous_answers", {}))
+
+            messages.append({"role": "assistant", "content": reply})
+            chat["title"] = _chat_title(messages)
+
+            if result.get("stage") == "complete":
+                document = result.get("document")
+
+                chat["previous_answers"]["document"] = document
+                chat["stage"] = "editing"
+
+                # generate PDF directly from collected doc
+                lines = document.strip().split("\n", 1)
+                title = lines[0].strip()
+                body = lines[1].strip() if len(lines) > 1 else ""
+
+                pdf_bytes = create_pdf(title, body)
+                doc_id = uuid.uuid4().hex[:12]
+                _pdf_store[doc_id] = pdf_bytes
+
+                write_store(store)
+
+                return jsonify({
+                    "reply": reply,
+                    "stage": "complete",
+                    "document": document,
+                    "doc_id": doc_id,
+                    "title": title
+                })
+                
+            write_store(store)
+
+            return jsonify({
+                "reply": reply,
+                "stage": chat["stage"],
+                "document": chat["previous_answers"].get("document")
+            })
+
+        else:
+            reply = call_model(messages)
     except Exception as e:
         messages.pop()
         if DEBUG_LOG:
@@ -144,7 +205,17 @@ def send_message(chat_id):
     messages.append({"role": "assistant", "content": reply})
     store["chats"][chat_id]["title"] = _chat_title(messages)
     write_store(store)
-    return jsonify({"reply": reply})
+    response = { "reply": reply}
+
+    if chat.get("mode") == "guided":
+        response["stage"] = chat.get("stage")
+        response["document"] = chat.get("previous_answers", {}).get("document")
+        if doc_id:
+            response["doc_id"] = doc_id
+        if title:
+            response["title"] = title
+    
+    return jsonify(response)
 
 
 # ── Document generation API ──
@@ -162,6 +233,32 @@ def generate_document(chat_id):
     store = read_store()
     if chat_id not in store["chats"]:
         return jsonify({"error": "Not found"}), 404
+    
+    chat = store["chats"].get(chat_id)
+
+    if chat.get("mode") == "guided":
+        document = chat.get("previous_answers", {}).get("document")
+
+        if not document:
+            return jsonify({"error": "No document available yet"}), 400
+
+        lines = document.strip().split("\n", 1)
+        title = lines[0].strip()
+        body = lines[1].strip() if len(lines) > 1 else ""
+
+        pdf_bytes = create_pdf(title, body)
+        doc_id = uuid.uuid4().hex[:12]
+        _pdf_store[doc_id] = pdf_bytes
+
+        chat["stage"] = "complete"
+
+        write_store(store)
+
+        return jsonify({
+            "document": document,
+            "doc_id": doc_id,
+            "title": title
+        })
 
     body = request.get_json()
     user_text = (body.get("message") or "").strip()
@@ -228,6 +325,39 @@ def download_document(doc_id):
         mimetype="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=MyEdMaster_Document.pdf"},
     )
+
+@app.route("/api/chats/<chat_id>/mode", methods=["POST"])
+def set_mode(chat_id):
+    store = read_store()
+    chat = store["chats"].get(chat_id)
+
+    if not chat:
+        return jsonify({"error": "Not found"}), 404
+
+    body = request.get_json()
+    mode = body.get("mode", "quick")
+
+    chat["mode"] = mode
+
+    write_store(store)
+    return jsonify({"ok": True, "mode": mode})
+
+@app.route("/api/chats/<chat_id>/draft", methods=["POST"])
+def save_draft(chat_id):
+    store = read_store()
+    chat = store["chats"].get(chat_id)
+    if not chat:
+        return jsonify({"error": "Chat not found"}), 404
+
+    body = request.get_json()
+    draft_text = body.get("document") or body.get("draft") or ""
+    
+    chat.setdefault("previous_answers", {})["document"] = draft_text
+
+    write_store(store)
+
+    return jsonify({"message": "Draft saved", "document": draft_text}) 
+
 
 
 if __name__ == "__main__":
