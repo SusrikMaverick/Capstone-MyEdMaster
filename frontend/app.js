@@ -1,6 +1,8 @@
 let activeChat = null;
 let sending = false;
 let docMode = false;
+/** Server-backed: true while this chat is in document Q&A before PDF. */
+let documentIntakeActive = false;
 
 const $ = (s) => document.querySelector(s);
 const chatArea = $('#chatArea');
@@ -10,6 +12,7 @@ const sendBtn = $('#sendBtn');
 const docToggle = $('#docToggle');
 const inputWrap = $('#inputWrap');
 const modeHint = $('#modeHint');
+const generatePdfBtn = $('#generatePdfBtn');
 
 // ── API helpers ──
 
@@ -36,8 +39,9 @@ function renderSidebar(chats, currentId) {
   }
   sidebarList.innerHTML = chats.map(c => {
     const cls = c.id === currentId ? ' active' : '';
+    const intakeCls = c.document_intake ? ' sidebar-item-intake' : '';
     const date = (c.created || '').slice(0, 10);
-    return `<div class="sidebar-item${cls}">
+    return `<div class="sidebar-item${cls}${intakeCls}">
       <div class="sidebar-link" data-id="${c.id}">
         <span class="sidebar-title">${esc(c.title)}</span>
         <span class="sidebar-date">${date}</span>
@@ -72,7 +76,9 @@ sidebarList.addEventListener('click', async (e) => {
 async function selectChat(id) {
   activeChat = id;
   const data = await api(`/api/chats/${id}/messages`);
+  documentIntakeActive = data.document_intake === true;
   renderMessages(data.messages);
+  syncDocumentIntakeUi();
   await loadChats();
 }
 
@@ -100,21 +106,45 @@ function showEmpty() {
 $('#newChatBtn').addEventListener('click', async () => {
   const data = await api('/api/chats', { method: 'POST' });
   activeChat = data.id;
+  documentIntakeActive = false;
   showEmpty();
+  syncDocumentIntakeUi();
   await loadChats();
   msgInput.focus();
 });
 
+function syncDocumentIntakeUi() {
+  const interrogating = docMode && documentIntakeActive;
+  docToggle.classList.toggle('interrogating', interrogating);
+  docToggle.title = interrogating
+    ? 'Document intake: answering questions before PDF'
+    : 'Toggle PDF document generation mode';
+  if (docMode) {
+    modeHint.textContent = documentIntakeActive
+      ? 'Intake: answer questions, then Generate PDF'
+      : 'PDF mode: describe the document';
+  } else {
+    modeHint.textContent = '';
+  }
+  generatePdfBtn.hidden = !(docMode && documentIntakeActive);
+  inputWrap.classList.toggle('doc-mode', docMode);
+  inputWrap.classList.toggle('doc-intake', interrogating);
+}
+
 // ── Document mode toggle ──
 
-docToggle.addEventListener('click', () => {
+docToggle.addEventListener('click', async () => {
   docMode = !docMode;
   docToggle.classList.toggle('active', docMode);
-  inputWrap.classList.toggle('doc-mode', docMode);
   msgInput.placeholder = docMode
     ? 'Describe the legal document you need…'
     : 'Type your legal question\u2026';
-  modeHint.textContent = docMode ? 'PDF generation mode' : '';
+  if (docMode && activeChat) {
+    const data = await api(`/api/chats/${activeChat}/messages`);
+    documentIntakeActive = data.document_intake === true;
+  }
+  syncDocumentIntakeUi();
+  msgInput.focus();
 });
 
 // ── Send message / generate document ──
@@ -143,13 +173,17 @@ async function sendMessage() {
     if (docMode) {
       const data = await api(`/api/chats/${activeChat}/document`, {
         method: 'POST',
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, finalize: false }),
       });
       typingEl.remove();
       if (data.error) {
         appendError(data.error);
+      } else if (data.phase === 'intake') {
+        documentIntakeActive = data.document_intake === true;
+        appendBubble('assistant', data.reply);
+        syncDocumentIntakeUi();
       } else {
-        appendDocBubble(data.reply, data.doc_id, data.title);
+        appendError('Unexpected response from server.');
       }
     } else {
       const data = await api(`/api/chats/${activeChat}/messages`, {
@@ -176,6 +210,52 @@ async function sendMessage() {
 }
 
 sendBtn.addEventListener('click', sendMessage);
+
+async function finalizeDocument() {
+  if (!activeChat || !documentIntakeActive || sending) return;
+
+  sending = true;
+  sendBtn.disabled = true;
+  generatePdfBtn.disabled = true;
+
+  const extra = msgInput.value.trim();
+  if (chatArea.querySelector('.empty-state')) chatArea.innerHTML = '';
+  if (extra) {
+    appendBubble('user', extra);
+    msgInput.value = '';
+    msgInput.style.height = 'auto';
+  }
+
+  const typingEl = appendTyping();
+  scrollBottom();
+
+  try {
+    const data = await api(`/api/chats/${activeChat}/document`, {
+      method: 'POST',
+      body: JSON.stringify({ message: extra, finalize: true }),
+    });
+    typingEl.remove();
+    if (data.error) {
+      appendError(data.error);
+    } else {
+      documentIntakeActive = data.document_intake === true;
+      appendDocBubble(data.reply, data.doc_id, data.title);
+      syncDocumentIntakeUi();
+    }
+  } catch (err) {
+    typingEl.remove();
+    appendError('Network error. Please try again.');
+  }
+
+  sending = false;
+  sendBtn.disabled = false;
+  generatePdfBtn.disabled = false;
+  scrollBottom();
+  await loadChats();
+  msgInput.focus();
+}
+
+generatePdfBtn.addEventListener('click', finalizeDocument);
 
 msgInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -277,4 +357,5 @@ function closeMobileSidebar() {
 (async () => {
   await loadChats();
   if (activeChat) await selectChat(activeChat);
+  else syncDocumentIntakeUi();
 })();

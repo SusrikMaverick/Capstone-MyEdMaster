@@ -106,6 +106,9 @@ html,body{
 }
 .sidebar-item:hover{background:var(--sb-hover)}
 .sidebar-item.active{background:var(--sb-active)}
+.sidebar-item-intake{
+  box-shadow:inset 3px 0 0 var(--accent);
+}
 
 .sidebar-link{
   flex:1;padding:10px 12px;text-decoration:none;color:var(--text);
@@ -241,6 +244,7 @@ html,body{
 }
 .input-wrap:focus-within{border-color:var(--text-sec)}
 .input-wrap.doc-mode{border-color:var(--text-sec);box-shadow:0 0 0 3px var(--doc-glow)}
+.input-wrap.doc-intake{border-color:var(--accent);box-shadow:0 0 0 3px var(--doc-glow)}
 
 .input-wrap textarea{
   flex:1;border:none;outline:none;resize:none;
@@ -256,12 +260,29 @@ html,body{
   display:flex;align-items:center;justify-content:center;
   transition:all .15s;flex-shrink:0;
 }
+.btn-mode .doc-icon{
+  display:flex;align-items:center;justify-content:center;
+}
+.btn-mode .doc-icon-intake{display:none}
+.btn-mode.interrogating .doc-icon-default{display:none}
+.btn-mode.interrogating .doc-icon-intake{display:flex}
 .btn-mode:hover{background:var(--sb-hover);color:var(--text)}
 .btn-mode.active{background:var(--accent);color:var(--bg)}
+.btn-mode.active.interrogating{background:var(--accent);color:var(--bg);box-shadow:0 0 0 2px var(--doc-glow)}
 .mode-hint{
   font-size:10px;color:var(--text-sec);font-weight:500;
   white-space:nowrap;flex-shrink:0;padding-right:4px;
 }
+
+.btn-generate-pdf{
+  flex-shrink:0;white-space:nowrap;
+  padding:0 14px;height:36px;border-radius:18px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  transition:background .15s,border-color .15s;
+}
+.btn-generate-pdf:hover{background:var(--sb-hover);border-color:var(--text-sec)}
+.btn-generate-pdf:disabled{opacity:.45;cursor:not-allowed}
 
 .btn-send{
   width:36px;height:36px;border-radius:50%;border:none;
